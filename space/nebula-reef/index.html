@@ -1,0 +1,774 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<title>Nebula Reef</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" data-aw-favicon href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23293e32%22/%3E%3Cpath d=%22M32 9l5.4 11.6 12.6 1.6-9.3 8.7 2.4 12.5L32 37.2 20.9 43.4l2.4-12.5L14 22.2l12.6-1.6z%22 fill=%22%23f2c14e%22/%3E%3Ctext x=%2232%22 y=%2258%22 font-family=%22ui-rounded,system-ui,sans-serif%22 font-size=%2217%22 font-weight=%22800%22 text-anchor=%22middle%22 fill=%22%23fffaf0%22%3EAW%3C/text%3E%3C/svg%3E">
+<style>
+html { background: #06121c; }
+body { position: fixed; inset: 0; margin: 0; overflow: hidden; background: #06121c; color: #eef7fb; font: 600 15px/1.45 system-ui, -apple-system, sans-serif; }
+canvas { position: absolute; width: 100%; height: 100%; display: block; transition: filter .8s, opacity 1s; }
+body.l canvas { opacity: 0; }
+body.m canvas { filter: blur(6px) brightness(.55); }
+.stamp { position: fixed; top: 14px; right: 14px; z-index: 5; border: 3px solid #f2c86b; color: #f2c86b; padding: 3px 10px; font: 700 13px ui-monospace, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; transform: rotate(-4deg); background: rgba(6,18,28,.85); border-radius: 4px; }
+#menu { position: absolute; inset: 0; display: none; place-items: center; text-align: center; padding: 16px; }
+body.m #menu, body.l #menu { display: grid; }
+#menu h1 { font-size: clamp(28px, 6vw, 54px); margin: 0 0 6px; letter-spacing: .02em; }
+#menu p { margin: 6px auto; max-width: 560px; color: #c9dde6; }
+#go { margin: 14px 0 8px; padding: 12px 26px; font: 700 17px system-ui; border: 0; border-radius: 12px; background: #7fe0d0; color: #04222b; cursor: pointer; }
+body.l #go { display: none; }
+#s { color: #9fc3d1; }
+body:not(.l) #s { display: none; }
+.keys { font: 500 13px ui-monospace, Menlo, monospace; color: #b8ccd6; }
+#menu a { color: #7fe0d0; }
+#i { position: fixed; left: 10px; bottom: 10px; font: 12px ui-monospace, Menlo, monospace; background: rgba(0,0,0,.55); padding: 4px 8px; border-radius: 6px; }
+body.e #s { color: #ffb3a7; display: block; }
+</style>
+</head>
+<body class=l>
+<canvas id=c></canvas>
+<div class=stamp>Exploration</div>
+<div id=menu><div>
+  <h1>Nebula Reef</h1>
+  <p>An asteroid reef inside a teal and amber nebula, rebuilt in code from a Midjourney concept. No models or textures.</p>
+  <p id=s>Starting…</p>
+  <button id=go>Fly in</button>
+  <p class=keys>Mouse to look · WASD to fly · E/Q up/down · Shift faster · 1–3 viewpoints (1 is the concept's camera) · H stats · Esc menu</p>
+  <p>Built on the <a href="https://github.com/Noniv/abyssal-garden">Abyssal Garden</a> engine ideas and math.js by Maksymilian Dendura (MIT).</p>
+</div></div>
+<div id=i hidden></div>
+<script>(async()=>{// ============================================================================
+// math + procedural helpers (load-time only unless noted)
+// ============================================================================
+const { sin, cos, sqrt, min, max, abs, floor, PI, pow, atan2, hypot, exp, round } = Math;
+const TAU = PI * 2;
+let _seed = 20261110;
+const rnd = () => {
+  _seed = (_seed + 0x6D2B79F5) | 0;
+  let t = Math.imul(_seed ^ (_seed >>> 15), 1 | _seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+const rr = (a, b) => a + (b - a) * rnd();
+// each generator system starts its own random stream, so the systems stay independent
+const rseed = (s) => { _seed = (20261110 + Math.imul(s, 7919)) | 0; };
+const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+const mix = (a, b, t) => a + (b - a) * t;
+const sstep = (a, b, x) => { x = clamp((x - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); };
+
+const ihash = (x, y, z) => {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(z, 1274126177)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+};
+const vnoise = (x, y, z) => {
+  const ix = floor(x), iy = floor(y), iz = floor(z);
+  let fx = x - ix, fy = y - iy, fz = z - iz;
+  fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy); fz = fz * fz * (3 - 2 * fz);
+  const a = mix(mix(ihash(ix, iy, iz), ihash(ix + 1, iy, iz), fx), mix(ihash(ix, iy + 1, iz), ihash(ix + 1, iy + 1, iz), fx), fy);
+  const b = mix(mix(ihash(ix, iy, iz + 1), ihash(ix + 1, iy, iz + 1), fx), mix(ihash(ix, iy + 1, iz + 1), ihash(ix + 1, iy + 1, iz + 1), fx), fy);
+  return mix(a, b, fz);
+};
+const fbm = (x, y, z, o = 4) => {
+  let a = 0.5, s = 0;
+  for (let i = 0; i < o; i++) { s += a * vnoise(x, y, z); x = x * 2.03 + 17.1; y = y * 2.03 + 31.7; z = z * 2.03 + 5.3; a *= 0.5; }
+  return s / (1 - 2 * a);
+};
+
+// quaternion helpers (return plain arrays; load-time only)
+const qAxis = (x, y, z, a) => { const l = hypot(x, y, z) || 1, s = sin(a / 2) / l; return [x * s, y * s, z * s, cos(a / 2)]; };
+const qMul = (a, b) => [
+  a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+  a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+  a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]];
+const qRand = () => { const q = [rr(-1, 1), rr(-1, 1), rr(-1, 1), rr(-1, 1)]; const l = hypot(...q) || 1; return q.map((v) => v / l); };
+// shortest rotation taking +Y to n
+const qFromY = (nx, ny, nz) => {
+  if (ny < -0.9999) return [1, 0, 0, 0];
+  const q = [nz, 0, -nx, 1 + ny]; const l = hypot(...q); return q.map((v) => v / l);
+};
+
+// world grid
+const NX = 512, NY = 80, NZ = 512, VS = 0.75, OX = -192, OY = -56, OZ = -192;
+const CELLS = 16, CELLW = 24; // culling grid over XZ
+const NCHUNK = 7; // 3 small + 3 large rock chunk meshes + pebbles
+
+// ---------------------------------------------------------------- naive surface nets
+// D: scalar field (>0 inside), dims nx,ny,nz. Returns grid-space positions + triangle indices.
+function surfaceNets(D, nx, ny, nz) {
+  let pos = new Float32Array(1 << 20), nv = 0;
+  let idx = new Uint32Array(1 << 21), ni = 0;
+  const sl = nx * ny;
+  let cur = new Int32Array(sl), prev = new Int32Array(sl);
+  for (let z = 0; z < nz - 1; z++) {
+    for (let y = 0; y < ny - 1; y++) {
+      let i0 = nx * (y + ny * z);
+      for (let x = 0; x < nx - 1; x++, i0++) {
+        const d0 = D[i0], d1 = D[i0 + 1], d2 = D[i0 + nx], d3 = D[i0 + nx + 1];
+        const d4 = D[i0 + sl], d5 = D[i0 + sl + 1], d6 = D[i0 + sl + nx], d7 = D[i0 + sl + nx + 1];
+        const m = (d0 > 0) | ((d1 > 0) << 1) | ((d2 > 0) << 2) | ((d3 > 0) << 3) | ((d4 > 0) << 4) | ((d5 > 0) << 5) | ((d6 > 0) << 6) | ((d7 > 0) << 7);
+        if (m === 0 || m === 255) continue;
+        let sx = 0, sy = 0, sz = 0, n = 0, t;
+        if ((d0 > 0) !== (d1 > 0)) { t = d0 / (d0 - d1); sx += t; n++; }
+        if ((d2 > 0) !== (d3 > 0)) { t = d2 / (d2 - d3); sx += t; sy += 1; n++; }
+        if ((d4 > 0) !== (d5 > 0)) { t = d4 / (d4 - d5); sx += t; sz += 1; n++; }
+        if ((d6 > 0) !== (d7 > 0)) { t = d6 / (d6 - d7); sx += t; sy += 1; sz += 1; n++; }
+        if ((d0 > 0) !== (d2 > 0)) { t = d0 / (d0 - d2); sy += t; n++; }
+        if ((d1 > 0) !== (d3 > 0)) { t = d1 / (d1 - d3); sy += t; sx += 1; n++; }
+        if ((d4 > 0) !== (d6 > 0)) { t = d4 / (d4 - d6); sy += t; sz += 1; n++; }
+        if ((d5 > 0) !== (d7 > 0)) { t = d5 / (d5 - d7); sy += t; sx += 1; sz += 1; n++; }
+        if ((d0 > 0) !== (d4 > 0)) { t = d0 / (d0 - d4); sz += t; n++; }
+        if ((d1 > 0) !== (d5 > 0)) { t = d1 / (d1 - d5); sz += t; sx += 1; n++; }
+        if ((d2 > 0) !== (d6 > 0)) { t = d2 / (d2 - d6); sz += t; sy += 1; n++; }
+        if ((d3 > 0) !== (d7 > 0)) { t = d3 / (d3 - d7); sz += t; sx += 1; sy += 1; n++; }
+        if (nv * 3 + 3 > pos.length) { const p2 = new Float32Array(pos.length * 2); p2.set(pos); pos = p2; }
+        const vi = nv++;
+        pos[vi * 3] = x + sx / n; pos[vi * 3 + 1] = y + sy / n; pos[vi * 3 + 2] = z + sz / n;
+        const ci = x + nx * y;
+        cur[ci] = vi;
+        if (ni + 18 > idx.length) { const i2 = new Uint32Array(idx.length * 2); i2.set(idx); idx = i2; }
+        const s0 = d0 > 0;
+        let a, b, c, d;
+        if ((d1 > 0) !== s0 && y > 0 && z > 0) {
+          a = vi; b = cur[ci - nx]; c = prev[ci - nx]; d = prev[ci];
+          if (s0) { idx[ni++] = a; idx[ni++] = b; idx[ni++] = c; idx[ni++] = a; idx[ni++] = c; idx[ni++] = d; }
+          else { idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; idx[ni++] = a; idx[ni++] = d; idx[ni++] = c; }
+        }
+        if ((d2 > 0) !== s0 && x > 0 && z > 0) {
+          a = vi; b = prev[ci]; c = prev[ci - 1]; d = cur[ci - 1];
+          if (s0) { idx[ni++] = a; idx[ni++] = b; idx[ni++] = c; idx[ni++] = a; idx[ni++] = c; idx[ni++] = d; }
+          else { idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; idx[ni++] = a; idx[ni++] = d; idx[ni++] = c; }
+        }
+        if ((d4 > 0) !== s0 && x > 0 && y > 0) {
+          a = vi; b = cur[ci - 1]; c = cur[ci - 1 - nx]; d = cur[ci - nx];
+          if (s0) { idx[ni++] = a; idx[ni++] = b; idx[ni++] = c; idx[ni++] = a; idx[ni++] = c; idx[ni++] = d; }
+          else { idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; idx[ni++] = a; idx[ni++] = d; idx[ni++] = c; }
+        }
+      }
+    }
+    const tmp = cur; cur = prev; prev = tmp;
+  }
+  return { pos: pos.subarray(0, nv * 3), idx: idx.subarray(0, ni), nv, ni };
+}
+
+// trilinear sampler factory over a scalar grid (grid coords)
+const sampler3 = (D, nx, ny, nz) => (x, y, z) => {
+  x = clamp(x, 0, nx - 1.001); y = clamp(y, 0, ny - 1.001); z = clamp(z, 0, nz - 1.001);
+  const ix = x | 0, iy = y | 0, iz = z | 0, fx = x - ix, fy = y - iy, fz = z - iz;
+  const i = ix + nx * (iy + ny * iz), sl = nx * ny;
+  const a = mix(mix(D[i], D[i + 1], fx), mix(D[i + nx], D[i + nx + 1], fx), fy);
+  const b = mix(mix(D[i + sl], D[i + sl + 1], fx), mix(D[i + sl + nx], D[i + sl + nx + 1], fx), fy);
+  return mix(a, b, fz);
+};
+
+// ---------------------------------------------------------------- mesh builder (solid vertex format: f32x3 pos, snorm8x4 normal+aux)
+class Mesh {
+  constructor() { this.p = []; this.i = []; this.aux = []; }
+  v(x, y, z, aux = 1) { this.p.push(x, y, z); this.aux.push(aux); return this.p.length / 3 - 1; }
+  tri(a, b, c) { this.i.push(a, b, c); }
+  quad(a, b, c, d) { this.i.push(a, b, c, a, c, d); }
+  // box-section sweep along a polyline; faces get their own vertices (hard edges)
+  sweep(pts, w, h, upFn, caps = true) {
+    const rings = [];
+    for (let k = 0; k < pts.length; k++) {
+      const p = pts[k], a = pts[max(k - 1, 0)], b = pts[min(k + 1, pts.length - 1)];
+      let tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2]; const tl = hypot(tx, ty, tz) || 1; tx /= tl; ty /= tl; tz /= tl;
+      const u0 = upFn ? upFn(p, k) : [0, 1, 0];
+      let sx = u0[1] * tz - u0[2] * ty, sy = u0[2] * tx - u0[0] * tz, sz = u0[0] * ty - u0[1] * tx; const sl = hypot(sx, sy, sz) || 1; sx /= sl; sy /= sl; sz /= sl;
+      const ux = ty * sz - tz * sy, uy = tz * sx - tx * sz, uz = tx * sy - ty * sx;
+      const ww = typeof w === 'function' ? w(k) : w, hh = typeof h === 'function' ? h(k) : h;
+      const c = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([e, f]) => [p[0] + sx * e * ww / 2 + ux * f * hh / 2, p[1] + sy * e * ww / 2 + uy * f * hh / 2, p[2] + sz * e * ww / 2 + uz * f * hh / 2]);
+      const r = [];
+      for (let s = 0; s < 4; s++) { r.push(this.v(...c[s]), this.v(...c[(s + 1) % 4])); }
+      rings.push(r);
+      if (caps && (k === 0 || k === pts.length - 1)) {
+        const q = c.map((cc) => this.v(...cc));
+        if (k === 0) this.quad(q[0], q[1], q[2], q[3]); else this.quad(q[3], q[2], q[1], q[0]);
+      }
+    }
+    for (let k = 0; k < rings.length - 1; k++) for (let s = 0; s < 4; s++) {
+      const a = rings[k][s * 2], b = rings[k][s * 2 + 1], c = rings[k + 1][s * 2 + 1], d = rings[k + 1][s * 2];
+      this.quad(a, d, c, b);
+    }
+  }
+  // round tube along polyline with radius function
+  tube(pts, rad, sides = 6, capEnd = true, auxFn = null) {
+    const rings = [];
+    let ux = 0.31, uy = 0.9, uz = 0.3;
+    for (let k = 0; k < pts.length; k++) {
+      const p = pts[k], a = pts[max(k - 1, 0)], b = pts[min(k + 1, pts.length - 1)];
+      let tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2]; const tl = hypot(tx, ty, tz) || 1; tx /= tl; ty /= tl; tz /= tl;
+      let sx = uy * tz - uz * ty, sy = uz * tx - ux * tz, sz = ux * ty - uy * tx; const sl = hypot(sx, sy, sz) || 1; sx /= sl; sy /= sl; sz /= sl;
+      ux = ty * sz - tz * sy; uy = tz * sx - tx * sz; uz = tx * sy - ty * sx;
+      const r = typeof rad === 'function' ? rad(k) : rad, ring = [];
+      for (let s = 0; s < sides; s++) { const an = s / sides * TAU; ring.push(this.v(p[0] + (sx * cos(an) + ux * sin(an)) * r, p[1] + (sy * cos(an) + uy * sin(an)) * r, p[2] + (sz * cos(an) + uz * sin(an)) * r, auxFn ? auxFn(k) : min(1, 0.35 + 0.65 * k / (pts.length - 1)))); }
+      rings.push(ring);
+    }
+    for (let k = 0; k < rings.length - 1; k++) for (let s = 0; s < sides; s++) {
+      const s2 = (s + 1) % sides; this.quad(rings[k][s], rings[k][s2], rings[k + 1][s2], rings[k + 1][s]);
+    }
+    if (capEnd) { const e = pts[pts.length - 1], c = this.v(e[0], e[1], e[2], auxFn ? auxFn(pts.length - 1) : 1); const r = rings[rings.length - 1]; for (let s = 0; s < sides; s++) this.tri(r[s], r[(s + 1) % sides], c); }
+  }
+  // returns {vb: ArrayBuffer, ib: Uint32Array}; normals area-weighted; aux -> normal.w
+  build(nrmFn) {
+    const n = this.p.length / 3, P = this.p, I = this.i, N = new Float32Array(n * 3);
+    for (let t = 0; t < I.length; t += 3) {
+      const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+      const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2], vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      for (const k of [a, b, c]) { N[k] += nx; N[k + 1] += ny; N[k + 2] += nz; }
+    }
+    const vb = new ArrayBuffer(n * 16), f = new Float32Array(vb), s = new Int8Array(vb);
+    for (let k = 0; k < n; k++) {
+      let nx = N[k * 3], ny = N[k * 3 + 1], nz = N[k * 3 + 2];
+      if (nrmFn) { const q = nrmFn(P[k * 3], P[k * 3 + 1], P[k * 3 + 2], nx, ny, nz); nx = q[0]; ny = q[1]; nz = q[2]; }
+      const l = hypot(nx, ny, nz) || 1;
+      f[k * 4] = P[k * 3]; f[k * 4 + 1] = P[k * 3 + 1]; f[k * 4 + 2] = P[k * 3 + 2];
+      s[k * 16 + 12] = round(nx / l * 127); s[k * 16 + 13] = round(ny / l * 127); s[k * 16 + 14] = round(nz / l * 127); s[k * 16 + 15] = round(clamp(this.aux[k], -1, 1) * 127);
+    }
+    return { vb, ib: new Uint32Array(I), nv: n };
+  }
+}
+
+// icosphere with shared vertices
+function icosphere(sub, fn) {
+  const m = new Mesh(), t = (1 + sqrt(5)) / 2;
+  let V = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((v) => { const l = hypot(...v); return v.map((c) => c / l); });
+  let F = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+  for (let s = 0; s < sub; s++) {
+    const cache = new Map(), F2 = [];
+    const mid = (a, b) => {
+      const key = a < b ? a * 65536 + b : b * 65536 + a;
+      let r = cache.get(key);
+      if (r === undefined) { const p = [0, 1, 2].map((k) => V[a][k] + V[b][k]); const l = hypot(...p); V.push(p.map((c) => c / l)); r = V.length - 1; cache.set(key, r); }
+      return r;
+    };
+    for (const [a, b, c] of F) { const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a); F2.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]); }
+    F = F2;
+  }
+  for (const v of V) { const p = fn ? fn(v[0], v[1], v[2]) : v; m.v(p[0], p[1], p[2]); }
+  for (const f of F) m.tri(f[0], f[1], f[2]);
+  return m;
+}
+
+// ============================================================================
+// Space Garden engine: a small WebGPU renderer built on the Abyssal Garden methods
+// (https://github.com/Noniv/abyssal-garden, MIT). What it does:
+//   - HDR rgba16float with 4x MSAA and a reversed-Z depth32float buffer (infinite far plane)
+//   - instanced solids (Mesh vertex format from math.js) plus emissive points
+//   - a sky pass, a bloom chain, and a post pass that tone-maps and applies the scene's grade
+//   - two-way dynamic resolution from GPU timestamp queries (9.8 to 13.6 ms band)
+//   - zero per-frame allocations: all per-frame state lives in F and preallocated arrays
+// A scene module supplies its WGSL (sky, solid shading, fog, grade) and its geometry.
+// ============================================================================
+const $ = (id) => document.getElementById(id);
+const QS = new URLSearchParams(location.search);
+const SHOT = QS.has('shot'); // ?shot=<pose index>&t=<time>: render one fixed frame at 1456x816 and upload it
+const fail = (m) => { throw new Error(m, { cause: 1 }); };
+
+async function runScene(SC) {
+  const canvas = $('c'), body = document.body;
+  const say = (m) => { $('s').textContent = m; };
+  if (!navigator.gpu) fail('This scene needs WebGPU. Try a current Chrome or Edge, or Safari 26.');
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) fail('No WebGPU adapter found.');
+  const hasTS = adapter.features.has('timestamp-query');
+  const device = await adapter.requestDevice({ requiredFeatures: hasTS ? ['timestamp-query'] : [] });
+  device.addEventListener('uncapturederror', (e) => console.error('GPU: ' + e.error.message));
+  const ctx = canvas.getContext('webgpu'), FMT = navigator.gpu.getPreferredCanvasFormat();
+  const Q = device.queue, HDR = 'rgba16float', DEPTH = 'depth32float', AA = 4;
+  const TU = GPUTextureUsage, BU = GPUBufferUsage;
+  const buf = (data, usage) => { const b = device.createBuffer({ size: (data.byteLength + 3) & ~3, usage: usage | BU.COPY_DST }); Q.writeBuffer(b, 0, data.buffer || data, data.byteOffset || 0, data.byteLength); return b; };
+  const tex = (w, h, format, usage, samples = 1) => device.createTexture({ size: [w, h], format, usage, sampleCount: samples });
+
+  // ---------------------------------------------------------------- build the scene's content (load time)
+  say('Shaping the rocks…'); await new Promise((r) => setTimeout(r, 30));
+  const G = SC.build(); // { meshes:[{vb,ib,nv, inst:Float32Array(12/inst)}], points:Float32Array(8/pt), poses:[[x,y,z,yaw,pitch,fovY]], collide?(F) }
+  say('Lighting the scene…'); await new Promise((r) => setTimeout(r, 30));
+
+  // ---------------------------------------------------------------- shared WGSL
+  const COMMON = /*wgsl*/`
+struct U { cam: vec4f, fwd: vec4f, right: vec4f, up: vec4f, sun: vec4f, res: vec4f, p0: vec4f, p1: vec4f };
+@group(0) @binding(0) var<uniform> u: U;
+fn toClip(p: vec3f) -> vec4f {
+  let r = p - u.cam.xyz; let f = 1.0 / u.fwd.w;
+  return vec4f(dot(r, u.right.xyz) * f / u.right.w, dot(r, u.up.xyz) * f, u.up.w, dot(r, u.fwd.xyz));
+}
+fn rayDir(ndc: vec2f) -> vec3f { return normalize(u.fwd.xyz + u.right.xyz * ndc.x * u.fwd.w * u.right.w + u.up.xyz * ndc.y * u.fwd.w); }
+fn qrot(q: vec4f, v: vec3f) -> vec3f { let t = 2.0 * cross(q.xyz, v); return v + q.w * t + cross(q.xyz, t); }
+fn h31(p: vec3f) -> f32 { var q = fract(p * 0.1031); q += dot(q, q.zyx + 31.32); return fract((q.x + q.y) * q.z); }
+fn vn3(p: vec3f) -> f32 {
+  let i = floor(p); var f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(h31(i), h31(i + vec3f(1, 0, 0)), f.x), mix(h31(i + vec3f(0, 1, 0)), h31(i + vec3f(1, 1, 0)), f.x), f.y),
+             mix(mix(h31(i + vec3f(0, 0, 1)), h31(i + vec3f(1, 0, 1)), f.x), mix(h31(i + vec3f(0, 1, 1)), h31(i + vec3f(1, 1, 1)), f.x), f.y), f.z);
+}
+fn fbm3(p0: vec3f, o: i32) -> f32 { var p = p0; var a = 0.5; var s = 0.0; for (var i = 0; i < o; i++) { s += a * vn3(p); p = p * 2.03 + vec3f(17.1, 31.7, 5.3); a *= 0.5; } return s / (1.0 - 2.0 * a); }
+fn sat(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }
+`;
+  const SCN = COMMON + SC.wgsl; // scene functions: sky(rd), shadeSolid(...), fogApply(col, wp, d), grade(...)
+
+  const mod = (code) => { const m = device.createShaderModule({ code }); m.getCompilationInfo().then((i) => { for (const e of i.messages) if (e.type === 'error') console.error('WGSL ' + e.lineNum + ': ' + e.message + ' | ' + code.split('\n')[e.lineNum - 1]); }); return m; };
+  const mSky = mod(SCN + /*wgsl*/`
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f { let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u)); return vec4f(p * 2.0 - 1.0, 0.0, 1.0); }
+@fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let ndc = vec2f(fc.x * u.res.z * 2.0 - 1.0, 1.0 - fc.y * u.res.w * 2.0);
+  return vec4f(sky(rayDir(ndc)), 1.0);
+}`);
+  const mSolid = mod(SCN + /*wgsl*/`
+struct VO { @builtin(position) pos: vec4f, @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) aux: f32, @location(3) @interpolate(flat) prm: vec4f, @location(4) lp: vec3f };
+@vertex fn vs(@location(0) p: vec3f, @location(1) na: vec4f, @location(2) i0: vec4f, @location(3) i1: vec4f, @location(4) i2: vec4f) -> VO {
+  var o: VO;
+  var wp = i0.xyz + qrot(i1, p * i0.w);
+  wp.y += sin(u.cam.w * 0.9 + i2.y * 6.28) * select(i2.z, 0.0, i2.x > 2.5); // gentle bob (not for painted parts, whose i2.yzw is a colour)
+  o.wp = wp; o.n = qrot(i1, na.xyz); o.aux = na.w; o.prm = i2; o.lp = p; o.pos = toClip(wp); return o;
+}
+@fragment fn fs(i: VO) -> @location(0) vec4f {
+  let n = normalize(i.n); // meshes carry outward normals (terrain: field gradient; others: outward winding)
+  let c = shadeSolid(i.wp, n, i.aux, i.prm, i.lp);
+  return vec4f(fogApply(c, i.wp, length(i.wp - u.cam.xyz)), 1.0);
+}`);
+  const mPts = mod(SCN + /*wgsl*/`
+struct P { a: vec4f, b: vec4f }; // a: xyz + size (m), b: rgb emission + motion kind
+@group(0) @binding(1) var<storage, read> pts: array<P>;
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) c: vec3f };
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VO {
+  let q = pts[ii]; var o: VO;
+  let cs = array<vec2f, 6>(vec2f(-1, -1), vec2f(1, -1), vec2f(1, 1), vec2f(-1, -1), vec2f(1, 1), vec2f(-1, 1));
+  var c = cs[vi]; var wp = q.a.xyz; let t = u.cam.w; let k = q.b.w;
+  if (k > 0.5) { wp += pointMotion(wp, k, t); }
+  var right = u.right.xyz; var up = u.up.xyz; var sz = vec2f(q.a.w);
+  if (k > 2.5) { // streak: stretched along its motion
+    let dir = normalize(pointMotion(wp, k, t + 0.05) - pointMotion(wp, k, t));
+    right = dir; up = normalize(cross(dir, wp - u.cam.xyz)); sz = vec2f(q.a.w * 18.0, q.a.w * 0.6);
+  }
+  let d = length(wp - u.cam.xyz);
+  let minS = d * u.fwd.w * 2.0 * u.res.w * 1.6; // at least ~1.6 px
+  let s = max(sz, vec2f(minS));
+  let fade = sat(sz.x / minS); // sub-pixel points dim instead of shrinking
+  o.pos = toClip(wp + right * c.x * s.x + up * c.y * s.y); o.uv = c;
+  o.c = fogApply(q.b.rgb * fade, wp, d) - fogApply(vec3f(0.0), wp, d);
+  return o;
+}
+@fragment fn fs(i: VO) -> @location(0) vec4f { let r = 1.0 - dot(i.uv, i.uv); if (r <= 0.0) { discard; } return vec4f(i.c * r * r, 0.0); }`);
+  const mBlit = mod(/*wgsl*/`
+@group(0) @binding(0) var t: texture_2d<f32>; @group(0) @binding(1) var s: sampler;
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f { let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u)); return vec4f(p * 2.0 - 1.0, 0.0, 1.0); }
+@fragment fn down0(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let d = vec2f(textureDimensions(t)); let ts = 1.0 / d; let uv = fc.xy * 2.0 * ts;
+  var c = (textureSample(t, s, uv + ts * vec2f(-1, -1)) + textureSample(t, s, uv + ts * vec2f(1, -1)) + textureSample(t, s, uv + ts * vec2f(-1, 1)) + textureSample(t, s, uv + ts * vec2f(1, 1))).rgb * 0.25;
+  let l = dot(c, vec3f(0.2126, 0.7152, 0.0722)); c *= clamp((l - 1.0) / 2.0, 0.0, 1.0); // only the bright parts bloom
+  return vec4f(min(c, vec3f(64.0)), 1.0);
+}
+@fragment fn down(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let d = vec2f(textureDimensions(t)); let ts = 1.0 / d; let uv = fc.xy * 2.0 * ts;
+  return vec4f((textureSample(t, s, uv + ts * vec2f(-1, -1)) + textureSample(t, s, uv + ts * vec2f(1, -1)) + textureSample(t, s, uv + ts * vec2f(-1, 1)) + textureSample(t, s, uv + ts * vec2f(1, 1))).rgb * 0.25, 1.0);
+}
+@fragment fn up(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let d = vec2f(textureDimensions(t)); let ts = 1.0 / d; let uv = fc.xy * 0.5 * ts;
+  var c = textureSample(t, s, uv).rgb * 4.0;
+  c += (textureSample(t, s, uv + ts * vec2f(-1, 0)) + textureSample(t, s, uv + ts * vec2f(1, 0)) + textureSample(t, s, uv + ts * vec2f(0, -1)) + textureSample(t, s, uv + ts * vec2f(0, 1))).rgb * 2.0;
+  c += (textureSample(t, s, uv + ts * vec2f(-1, -1)) + textureSample(t, s, uv + ts * vec2f(1, -1)) + textureSample(t, s, uv + ts * vec2f(-1, 1)) + textureSample(t, s, uv + ts * vec2f(1, 1))).rgb;
+  return vec4f(c / 16.0, 1.0);
+}`);
+  const mPost = mod(SCN + /*wgsl*/`
+@group(0) @binding(1) var sL: sampler; @group(0) @binding(2) var tRes: texture_2d<f32>; @group(0) @binding(3) var tBl: texture_2d<f32>;
+@group(0) @binding(4) var tD: texture_depth_multisampled_2d;
+fn depthAt(p: vec2i) -> f32 { let d = vec2i(textureDimensions(tD)) - 1; return textureLoad(tD, clamp(p, vec2i(0), d), 0); }
+fn hdrAt(uv: vec2f) -> vec3f { return textureSampleLevel(tRes, sL, uv, 0.0).rgb; }
+` + SC.post + /*wgsl*/`
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f { let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u)); return vec4f(p * 2.0 - 1.0, 0.0, 1.0); }
+@fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let uv = fc.xy * u.res.zw; let px = vec2i(fc.xy);
+  var c = textureSampleLevel(tRes, sL, uv, 0.0).rgb;
+  let bl = textureSampleLevel(tBl, sL, uv, 0.0).rgb;
+  return vec4f(grade(c, bl, uv, px, depthAt(px)), 1.0);
+}`);
+
+  // ---------------------------------------------------------------- pipelines
+  device.pushErrorScope('validation');
+  const ubo = device.createBuffer({ size: 128, usage: BU.UNIFORM | BU.COPY_DST }), UB = new Float32Array(32);
+  const ptsBuf = buf(G.points.length ? G.points : new Float32Array(8), BU.STORAGE), nPts = G.points.length / 8;
+  const sL = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+  const depthW = { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' };
+  const depthR = { format: DEPTH, depthWriteEnabled: false, depthCompare: 'greater' };
+  const ms = { count: AA };
+  const pSky = device.createRenderPipeline({ layout: 'auto', vertex: { module: mSky, entryPoint: 'vs' }, fragment: { module: mSky, entryPoint: 'fs', targets: [{ format: HDR }] },
+    depthStencil: { format: DEPTH, depthWriteEnabled: false, depthCompare: 'always' }, multisample: ms });
+  const pSolid = device.createRenderPipeline({ layout: 'auto',
+    vertex: { module: mSolid, entryPoint: 'vs', buffers: [
+      { arrayStride: 16, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'snorm8x4' }] },
+      { arrayStride: 48, stepMode: 'instance', attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x4' }, { shaderLocation: 3, offset: 16, format: 'float32x4' }, { shaderLocation: 4, offset: 32, format: 'float32x4' }] }] },
+    fragment: { module: mSolid, entryPoint: 'fs', targets: [{ format: HDR }] }, primitive: { cullMode: 'none' }, depthStencil: depthW, multisample: ms });
+  const add = { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'zero', dstFactor: 'one' } };
+  const pPts = device.createRenderPipeline({ layout: 'auto', vertex: { module: mPts, entryPoint: 'vs' }, fragment: { module: mPts, entryPoint: 'fs', targets: [{ format: HDR, blend: add }] }, depthStencil: depthR, multisample: ms });
+  const blitP = (ep, blend) => device.createRenderPipeline({ layout: 'auto', vertex: { module: mBlit, entryPoint: 'vs' }, fragment: { module: mBlit, entryPoint: ep, targets: [{ format: HDR, blend }] } });
+  const pDown0 = blitP('down0'), pDown = blitP('down'), pUp = blitP('up', add);
+  const pPost = device.createRenderPipeline({ layout: 'auto', vertex: { module: mPost, entryPoint: 'vs' }, fragment: { module: mPost, entryPoint: 'fs', targets: [{ format: FMT }] } });
+
+  { const err = await device.popErrorScope(); if (err) { console.error('PIPELINE ' + err.message); fail('Shader error: ' + err.message.slice(0, 300)); } }
+  const bgSky = device.createBindGroup({ layout: pSky.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubo } }] });
+  const bgSolid = device.createBindGroup({ layout: pSolid.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubo } }] });
+  const bgPts = device.createBindGroup({ layout: pPts.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubo } }, { binding: 1, resource: { buffer: ptsBuf } }] });
+  // meshes: GPU buffers; instances are uploaded once (the scene is static apart from shader motion)
+  const draws = G.meshes.filter((m) => m.inst.length).map((m) => ({ vb: buf(new Uint8Array(m.vb), BU.VERTEX), ib: buf(m.ib, BU.INDEX), n: m.ib.length, ibuf: buf(m.inst, BU.VERTEX), ni: m.inst.length / 12 }));
+
+  // ---------------------------------------------------------------- render targets (rebuilt on resize)
+  const PIXMAX = 2560 * 1440, PIXMIN = 3e5;
+  let W = 0, H = 0, DW = 0, DH = 0, pix = PIXMAX;
+  let passScene, passPost, bloomPass = [], bloomBG = [], bgPost, targets = [];
+  const NB = 6;
+  function resize() {
+    if (SHOT) { DW = 1456; DH = 816; } else { DW = max(2, round(canvas.clientWidth * devicePixelRatio)); DH = max(2, round(canvas.clientHeight * devicePixelRatio)); }
+    const s = SHOT ? 1 : min(1, sqrt(pix / (DW * DH)));
+    const w = max(2, round(DW * s) & ~1), h = max(2, round(DH * s) & ~1);
+    if (w === W && h === H) return;
+    W = w; H = h; canvas.width = W; canvas.height = H;
+    ctx.configure({ device, format: FMT, alphaMode: 'opaque', usage: TU.RENDER_ATTACHMENT | TU.COPY_SRC });
+    for (const t of targets) t.destroy();
+    const tMS = tex(W, H, HDR, TU.RENDER_ATTACHMENT, AA), tDp = tex(W, H, DEPTH, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING, AA);
+    const tRes = tex(W, H, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING);
+    targets = [tMS, tDp, tRes];
+    const bl = [];
+    for (let i = 0; i < NB; i++) { const t = tex(max(1, W >> (i + 1)), max(1, H >> (i + 1)), HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING); bl.push(t); targets.push(t); }
+    const vRes = tRes.createView(), vBl = bl.map((t) => t.createView());
+    passScene = { colorAttachments: [{ view: tMS.createView(), resolveTarget: vRes, loadOp: 'clear', storeOp: 'discard', clearValue: [0, 0, 0, 1] }],
+      depthStencilAttachment: { view: tDp.createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'store' } };
+    passPost = { colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] };
+    const att = (v, clear) => ({ colorAttachments: [{ view: v, loadOp: clear ? 'clear' : 'load', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+    const blitBG = (p, v) => device.createBindGroup({ layout: p.getBindGroupLayout(0), entries: [{ binding: 0, resource: v }, { binding: 1, resource: sL }] });
+    bloomPass = []; bloomBG = [];
+    for (let i = 0; i < NB; i++) { bloomPass.push([att(vBl[i], true), i ? pDown : pDown0]); bloomBG.push(blitBG(i ? pDown : pDown0, i ? vBl[i - 1] : vRes)); }
+    for (let i = NB - 1; i > 0; i--) { bloomPass.push([att(vBl[i - 1], false), pUp]); bloomBG.push(blitBG(pUp, vBl[i])); }
+    bgPost = device.createBindGroup({ layout: pPost.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubo } }, { binding: 1, resource: sL },
+      { binding: 2, resource: vRes }, { binding: 3, resource: vBl[0] }, { binding: 4, resource: tDp.createView() }] });
+  }
+  resize();
+  addEventListener('resize', resize);
+
+  // ---------------------------------------------------------------- GPU timing
+  let qs, qRes, qRead = [], tsW;
+  const F = new Float64Array(32); // per-frame state, preallocated
+  const [CX, CY, CZ, YAW, PIT, VX, VY, VZ, TIME, LAST, GPU, FOV] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  let dynT = 0, dynN = 0, dynG = 0, dynGN = 0;
+  if (hasTS) {
+    qs = device.createQuerySet({ type: 'timestamp', count: 2 });
+    qRes = device.createBuffer({ size: 16, usage: BU.QUERY_RESOLVE | BU.COPY_SRC });
+    for (let i = 0; i < 4; i++) {
+      const b = device.createBuffer({ size: 16, usage: BU.MAP_READ | BU.COPY_DST }), o = { b, busy: false };
+      o.done = () => { const a = new BigInt64Array(b.getMappedRange()); const ms = Number(a[1] - a[0]) / 1e6; b.unmap(); o.busy = false; if (ms > 0 && ms < 1e3) { F[GPU] = ms; dynG += ms; dynGN++; } };
+      qRead.push(o);
+    }
+    tsW = { querySet: qs, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 };
+  }
+
+  // ---------------------------------------------------------------- camera + input
+  const poses = G.poses;
+  const setPose = (i) => { const p = poses[i]; F[CX] = p[0]; F[CY] = p[1]; F[CZ] = p[2]; F[YAW] = p[3]; F[PIT] = p[4]; F[FOV] = p[5]; F[VX] = F[VY] = F[VZ] = 0; };
+  setPose(SHOT ? +QS.get('shot') || 0 : 0);
+  if (SHOT) F[TIME] = +QS.get('t') || 0;
+  const keys = new Uint8Array(256); let mdx = 0, mdy = 0, flying = false, hud = false;
+  const KC = { KeyW: 1, KeyS: 2, KeyA: 3, KeyD: 4, KeyE: 5, KeyQ: 6, ShiftLeft: 7, ShiftRight: 7 };
+  addEventListener('keydown', (e) => {
+    if (KC[e.code]) keys[KC[e.code]] = 1;
+    if (e.code.startsWith('Digit')) { const i = +e.code.slice(5) - 1; if (i >= 0 && i < poses.length) setPose(i); }
+    if (e.code === 'KeyH') { hud = !hud; $('i').hidden = !hud; }
+  });
+  addEventListener('keyup', (e) => { if (KC[e.code]) keys[KC[e.code]] = 0; });
+  addEventListener('mousemove', (e) => { if (document.pointerLockElement === canvas) { mdx += e.movementX; mdy += e.movementY; } });
+  const go = () => { body.className = 'g'; canvas.requestPointerLock?.(); flying = true; };
+  $('go').onclick = go; canvas.onclick = () => { if (flying) canvas.requestPointerLock?.(); };
+  document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && flying) { body.className = 'm'; flying = false; } });
+
+  // ---------------------------------------------------------------- frame
+  const submitList = [null];
+  let hudT = 0, hudN = 0, hudMs = 0;
+  // shot mode renders on a timer, so it also works in a background tab
+  const next = SHOT || QS.has('timer') ? (f) => setTimeout(() => f(performance.now()), 16) : requestAnimationFrame; // ?timer: for testing in a hidden tab
+  function frame(now) {
+    if (!SHOT || shotN < 12) next(frame);
+    const dtr = now - F[LAST]; F[LAST] = now;
+    let dt = dtr / 1000; if (dt > 0.1) dt = 0.1;
+    if (SHOT) dt = 0;
+    // dynamic resolution: once a second, keep GPU time between 9.8 and 13.6 ms (pixels only)
+    if (!SHOT && dtr < 1e3 && (dynT += dtr) > 1000) {
+      const g = dynGN ? dynG / dynGN : 0, a = dynT / max(1, dynN); let k = 1;
+      if (g) { if (g > 13.6 || g < 9.8) k = 11.7 / g; } else if (a > 17.6) k = 15 / a; else if (a < 12.5) k = 1.1;
+      k = clamp(k, 0.5, 1.7); pix = clamp(pix * k, PIXMIN, min(PIXMAX, DW * DH || PIXMAX));
+      dynT = dynN = dynG = dynGN = 0; resize();
+    }
+    dynN++;
+    F[TIME] += dt;
+    // fly camera
+    const ls = 0.0022; F[YAW] += mdx * ls; F[PIT] = clamp(F[PIT] - mdy * ls, -1.5, 1.5); mdx = mdy = 0;
+    const cy = cos(F[YAW]), sy = sin(F[YAW]), cp = cos(F[PIT]), sp = sin(F[PIT]);
+    const fx = sy * cp, fy = sp, fz = cy * cp, rx = cy, rz = -sy; // right = (cos yaw, 0, -sin yaw)
+    const ux = -sp * sy, uy = cp, uz = -sp * cy;
+    if (flying) {
+      const sp2 = keys[7] ? 22 : 6, mf = keys[1] - keys[2], mr = keys[4] - keys[3], mu = keys[5] - keys[6];
+      const ax = (fx * mf + rx * mr) * sp2, ay = (fy * mf + mu) * sp2, az = (fz * mf + rz * mr) * sp2, kk = 1 - Math.exp(-dt * 6);
+      F[VX] += (ax - F[VX]) * kk; F[VY] += (ay - F[VY]) * kk; F[VZ] += (az - F[VZ]) * kk;
+    } else { const kk = 1 - Math.exp(-dt * 4); F[VX] -= F[VX] * kk; F[VY] -= F[VY] * kk; F[VZ] -= F[VZ] * kk; }
+    F[CX] += F[VX] * dt; F[CY] += F[VY] * dt; F[CZ] += F[VZ] * dt;
+    if (G.collide && !SHOT) G.collide(F); // shots use the exact hero camera
+    // uniforms
+    UB[0] = F[CX]; UB[1] = F[CY]; UB[2] = F[CZ]; UB[3] = F[TIME];
+    UB[4] = fx; UB[5] = fy; UB[6] = fz; UB[7] = Math.tan(F[FOV] / 2);
+    UB[8] = rx; UB[9] = 0; UB[10] = rz; UB[11] = W / H;
+    UB[12] = ux; UB[13] = uy; UB[14] = uz; UB[15] = 0.05;
+    UB[16] = SC.sun[0]; UB[17] = SC.sun[1]; UB[18] = SC.sun[2]; UB[19] = 0;
+    UB[20] = W; UB[21] = H; UB[22] = 1 / W; UB[23] = 1 / H;
+    if (SC.p0) { UB[24] = SC.p0[0]; UB[25] = SC.p0[1]; UB[26] = SC.p0[2]; UB[27] = SC.p0[3]; }
+    if (SC.p1) { UB[28] = SC.p1[0]; UB[29] = SC.p1[1]; UB[30] = SC.p1[2]; UB[31] = SC.p1[3]; }
+    Q.writeBuffer(ubo, 0, UB);
+
+    const e = device.createCommandEncoder();
+    if (hasTS) passScene.timestampWrites = tsW;
+    let r = e.beginRenderPass(passScene);
+    r.setPipeline(pSky); r.setBindGroup(0, bgSky); r.draw(3);
+    r.setPipeline(pSolid); r.setBindGroup(0, bgSolid);
+    for (let i = 0; i < draws.length; i++) { const d = draws[i]; r.setVertexBuffer(0, d.vb); r.setVertexBuffer(1, d.ibuf); r.setIndexBuffer(d.ib, 'uint32'); r.drawIndexed(d.n, d.ni); }
+    if (nPts) { r.setPipeline(pPts); r.setBindGroup(0, bgPts); r.draw(6, nPts); }
+    r.end();
+    for (let i = 0; i < bloomPass.length; i++) { r = e.beginRenderPass(bloomPass[i][0]); r.setPipeline(bloomPass[i][1]); r.setBindGroup(0, bloomBG[i]); r.draw(3); r.end(); }
+    const cur = ctx.getCurrentTexture();
+    passPost.colorAttachments[0].view = cur.createView();
+    r = e.beginRenderPass(passPost); r.setPipeline(pPost); r.setBindGroup(0, bgPost); r.draw(3); r.end();
+    let slot = null;
+    if (hasTS) { slot = qRead.find((o) => !o.busy) || null; if (slot) { e.resolveQuerySet(qs, 0, 2, qRes, 0); e.copyBufferToBuffer(qRes, 0, slot.b, 0, 16); slot.busy = true; } }
+    let shotBuf = null, bpr = 0;
+    if (SHOT && ++shotN === 12) { bpr = (W * 4 + 255) & ~255; shotBuf = device.createBuffer({ size: bpr * H, usage: BU.MAP_READ | BU.COPY_DST }); e.copyTextureToBuffer({ texture: cur }, { buffer: shotBuf, bytesPerRow: bpr }, [W, H]); }
+    submitList[0] = e.finish(); Q.submit(submitList);
+    if (slot) slot.b.mapAsync(GPUMapMode.READ).then(slot.done);
+    if (shotBuf) saveShot(shotBuf, bpr);
+    if (hud && (hudT += dtr) > 500) { $('i').textContent = `${(1000 * ++hudN / hudT).toFixed(0)} fps · GPU ${F[GPU].toFixed(1)} ms · ${W}×${H} · ${draws.reduce((a, d) => a + d.ni, 0)} solids · ${nPts} points · at ${F[CX].toFixed(1)}, ${F[CY].toFixed(1)}, ${F[CZ].toFixed(1)}`; hudT = hudN = 0; } else if (hud) hudN++;
+  }
+  let shotN = 0;
+  async function saveShot(b, bpr) {
+    await b.mapAsync(GPUMapMode.READ); const src = new Uint8Array(b.getMappedRange()), img = new ImageData(W, H), d = img.data, bgra = FMT.startsWith('bgra');
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const s = y * bpr + x * 4, o = (y * W + x) * 4; d[o] = src[s + (bgra ? 2 : 0)]; d[o + 1] = src[s + 1]; d[o + 2] = src[s + (bgra ? 0 : 2)]; d[o + 3] = 255; }
+    const c2 = new OffscreenCanvas(W, H); c2.getContext('2d').putImageData(img, 0, 0);
+    const blob = await c2.convertToBlob({ type: 'image/png' });
+    const name = QS.get('name') || `${SC.id}-pose${QS.get('shot')}`;
+    const res = await fetch('/shots/' + name + '.png', { method: 'PUT', body: blob }).catch(() => null);
+    document.title = 'SHOT ' + (res && res.ok ? 'saved ' : 'failed ') + name;
+  }
+  body.className = SHOT ? 'g' : 'm';
+  next((t) => { F[LAST] = t; frame(t); });
+}
+
+// ============================================================================
+// Scene: Nebula Reef. Reconstructs SPC-1.3 (see ../../process/DECOMPOSITION.md).
+// IDs in comments (NR-xx) refer to that record.
+// ============================================================================
+const HERO_FOV = 70 * PI / 180, HERO_PITCH = 0.42; // section 5: looking up ~24°, vertical FOV ~70°
+// star direction: the flare centre sits at about (0.85, 0.10) of the frame from the hero camera (NR-S1)
+const SUN = (() => {
+  const t = Math.tan(HERO_FOV / 2), a = 1456 / 816, nx = 0.98, ny = 1.12, cp = cos(HERO_PITCH), sp = sin(HERO_PITCH);
+  const d = [nx * t * a, sp + ny * t * cp, cp - ny * t * sp], l = hypot(...d); return d.map((v) => v / l);
+})();
+
+const SCENE = {
+  id: 'nebula-reef',
+  sun: SUN,
+  p0: (() => { const t = Math.tan(HERO_FOV / 2), a = 1456 / 816, nx = 0.08, ny = -0.3, cp = cos(HERO_PITCH), sp = sin(HERO_PITCH); const d = [nx * t * a, sp + ny * t * cp, cp - ny * t * sp], l = hypot(...d); return [d[0] / l, d[1] / l, d[2] / l, 0]; })(), // NR-S2 brightest haze (C3-D3)
+  wgsl: /*wgsl*/`
+const FOGC = vec3f(0.058, 0.195, 0.19);   // NR-S2 mid haze (#367371 measured, slightly darker before tone map)
+const AMBER = vec3f(1.00, 0.52, 0.20);     // NR-S1 flare (#e3b172 core)
+const SUNC = vec3f(2.0, 1.45, 0.85);       // warm key light
+fn phase(mu: f32) -> f32 { return 0.25 + 0.75 * pow(sat(mu), 6.0) + 2.0 * pow(sat(mu), 40.0); }
+fn sky(rd: vec3f) -> vec3f {
+  let s = u.sun.xyz; let mu = dot(rd, s);
+  // nebula body: teal, darker and bluer away from the star (NR-S2: A1 #1a5557 vs C3 #338175)
+  let n = fbm3(rd * 2.4 + vec3f(0.0, 0.0, u.cam.w * 0.004), 5);
+  let n2 = fbm3(rd * 6.0 + vec3f(3.1, 1.7, 0.4), 4);
+  var c = mix(vec3f(0.012, 0.07, 0.08), vec3f(0.055, 0.21, 0.20), smoothstep(0.25, 0.8, n * 0.75 + n2 * 0.25));
+  c *= 0.6 + 0.45 * sat(mu * 0.5 + 0.55);
+  // star glow and radial filaments (NR-S1): streaks around the star axis
+  // filaments: flame-like streaks flowing from the star toward the haze (E1-F1 → D2), stretched along that axis
+  let ax = normalize(u.p0.xyz - s * dot(u.p0.xyz, s)); let pr = normalize(cross(s, ax));
+  let fx = dot(rd, pr); let fy = dot(rd, ax);
+  let fil = fbm3(vec3f(fx * 16.0 + fy * 3.0, fy * 1.6 - u.cam.w * 0.02, 0.5), 5);
+  let band = exp(-fx * fx / 0.035) * smoothstep(-0.25, 0.15, fy) * smoothstep(0.75, 0.2, fy);
+  let glow = pow(sat(mu), 5.0);
+  c += vec3f(1.0, 0.34, 0.05) * (glow * 0.16 + pow(sat(mu), 30.0) * 0.24);
+  c += vec3f(1.0, 0.36, 0.06) * (0.2 + smoothstep(0.42, 0.9, fil) * 2.2) * band * pow(sat(mu * 1.3 - 0.1), 2.0) * 0.7;
+  
+  c += vec3f(0.07, 0.33, 0.28) * pow(sat(dot(rd, u.p0.xyz)), 9.0); // luminous teal haze behind the swarm (C3-D3)
+  c *= mix(1.0, 0.72, smoothstep(0.55, 0.92, rd.y) * (1.0 - pow(sat(mu), 4.0))); // the upper sky is darker (A1, C1, D1)
+  // smoky warm cloud bank between the swarm and the star (NR-S3)
+  let cl = smoothstep(0.52, 0.72, fbm3(rd * 3.2 + vec3f(7.0, 2.0, 1.0), 5));
+  c = mix(c, vec3f(0.035, 0.07, 0.07) + AMBER * glow * 0.3, cl * 0.9 * sat(mu * 2.2 + 0.1));
+  // sparse blue-white specks (NR-S4)
+  let g = rd * 380.0; let cell = floor(g); let h = h31(cell);
+  if (h > 0.9975) { let f = fract(g) - 0.5; c += vec3f(0.55, 0.8, 1.0) * (1.5 * sat(1.0 - length(f) * 3.0)) * fract(h * 97.0); }
+  return c;
+}
+fn fogApply(c: vec3f, wp: vec3f, d: f32) -> vec3f {
+  let rd = (wp - u.cam.xyz) / max(d, 1e-3); let mu = dot(rd, u.sun.xyz);
+  let ext = exp(-max(d - 6.0, 0.0) * vec3f(0.0150, 0.0100, 0.0095)); // warm light dies first (Abyssal-style per-channel extinction)
+  let ins = FOGC * (0.85 + 0.3 * sat(mu)) + vec3f(1.0, 0.42, 0.12) * pow(sat(mu), 4.0) * 0.24;
+  return c * ext + ins * (1.0 - ext);
+}
+fn shadeSolid(wp: vec3f, n: vec3f, aux: f32, prm: vec4f, lp: vec3f) -> vec3f {
+  let s = u.sun.xyz; let v = normalize(u.cam.xyz - wp);
+  let tex = fbm3(lp * 7.0 + vec3f(prm.y * 40.0), 4); let tex2 = vn3(lp * 31.0 + prm.y * 13.0);
+  var alb = mix(vec3f(0.26, 0.17, 0.10), vec3f(0.55, 0.40, 0.24), tex) * (0.8 + 0.4 * tex2);
+  // crumbly plates: bumped shading normal from object-space noise
+  let bq = lp * 9.0 + vec3f(prm.y * 17.0);
+  let nb = normalize(n + (vec3f(vn3(bq), vn3(bq + 5.2), vn3(bq + 9.7)) - 0.5) * 0.35 + (vec3f(vn3(bq * 3.1), vn3(bq * 3.1 + 2.0), vn3(bq * 3.1 + 7.0)) - 0.5) * 0.25); // NR-R1 tan/brown
+  let cav = sat(aux * 0.5 + 0.5);                       // crevices are darker
+  let nl = dot(nb, s);
+  var dif = sat(nl) * smoothstep(0.05, 0.55, nl) * 1.4;
+  // mat 1: rocks the source shows in shadow with only the upper rim catching the star (NR-R1, R3, R5)
+  if (prm.x > 0.5) { dif *= smoothstep(0.4, 0.05, dot(nb, v)) * smoothstep(0.0, 0.5, nb.y) * 1.2; }
+  let amb = mix(vec3f(0.006, 0.030, 0.028), vec3f(0.035, 0.13, 0.125), sat(nb.y * 0.5 + 0.5));   // teal nebula fill, darker below
+  let rim = pow(1.0 - sat(dot(n, v)), 3.0) * sat(dot(-v, s) + 0.35) * 1.4;   // NR-R3 back-lit edges
+  var c = alb * (SUNC * dif + amb * 2.0) * mix(0.3, 1.0, cav) + AMBER * rim * 0.3 * cav;
+  return c;
+}
+fn pointMotion(p: vec3f, k: f32, t: f32) -> vec3f {
+  let h = h31(floor(p * 7.0));
+  if (k > 2.5) { // NR-S5 cyan streaks: fast, down-left along the flare filaments
+    let dir = -normalize(u.sun.xyz + vec3f(0.0, 0.25, 0.0));
+    return dir * (fract(t * 0.18 + h) * 60.0 - 30.0);
+  }
+  return vec3f(sin(t * 0.21 + h * 6.28), sin(t * 0.17 + h * 9.1), cos(t * 0.19 + h * 3.3)) * 0.6;
+}
+`,
+  post: /*wgsl*/`
+fn aces(x: vec3f) -> vec3f { return sat3((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)); }
+fn sat3(x: vec3f) -> vec3f { return clamp(x, vec3f(0.0), vec3f(1.0)); }
+fn grade(c0: vec3f, bl: vec3f, uv: vec2f, px: vec2i, d0: f32) -> vec3f {
+  var c = c0 + bl * 0.3;
+  // star shafts: radial blur toward the star of the sky that is not covered by rocks
+  let s = u.sun.xyz; let sz = dot(s, u.fwd.xyz);
+  if (sz > 0.05) {
+    let sp = vec2f(dot(s, u.right.xyz) / sz / (u.fwd.w * u.right.w), dot(s, u.up.xyz) / sz / u.fwd.w);
+    let suv = vec2f(sp.x * 0.5 + 0.5, 0.5 - sp.y * 0.5);
+    var acc = vec3f(0.0); var w = 1.0;
+    for (var i = 0; i < 28; i++) {
+      let p = mix(uv, suv, f32(i) / 28.0 * 0.92);
+      let pp = vec2i(p * u.res.xy);
+      if (depthAt(pp) == 0.0) { acc += max(hdrAt(p) - vec3f(0.45), vec3f(0.0)) * w; }
+      w *= 0.94;
+    }
+    c += acc * 0.004 * AMBER;
+  }
+  c = aces(c * 0.62);
+  let vg = 1.0 - 0.18 * dot(uv - 0.5, uv - 0.5) * 2.0;
+  return pow(c * vg, vec3f(1.0 / 2.2));
+}
+`,
+  build() {
+    const t = Math.tan(HERO_FOV / 2), asp = 1456 / 816, cp = cos(HERO_PITCH), sp = sin(HERO_PITCH);
+    // world position seen at frame point (x, y) of the hero camera, d metres along the view axis
+    const at = (x, y, d) => { const nx = 2 * x - 1, ny = 1 - 2 * y; return [nx * t * asp * d, (sp + ny * t * cp) * d, (cp - ny * t * sp) * d]; };
+    // ---- rock family R(flat, flake, elong): a noise-displaced icosphere with terraced plates (section 4)
+    const rockMesh = (sub, seed, flat, flake, elong) => {
+      rseed(seed); const o = [rr(0, 50), rr(0, 50), rr(0, 50)], steps = rr(7, 11);
+      const m = icosphere(sub, (x, y, z) => {
+        let r = 1 + 0.42 * (fbm(x * 1.1 + o[0], y * 1.1 + o[1], z * 1.1 + o[2], 3) - 0.5) * 2;
+        r += 0.16 * (fbm(x * 4 + o[1], y * 4 + o[2], z * 4 + o[0], 3) - 0.5) + 0.07 * (fbm(x * 11 + o[2], y * 11, z * 11 + o[1], 2) - 0.5);
+        let X = x * r * elong, Y = y * r * flat, Z = z * r;
+        if (flake > 0) { const f = fbm(x * 2.6 + o[2], y * 2.6 + o[0], z * 2.6 + o[1], 3) * 5, k = floor(f) + sstep(0.8, 1, f - floor(f)); const s2 = 1 + flake * 0.07 * (k - 2.5); X *= s2; Y *= s2; Z *= s2; }
+        return [X, Y, Z];
+      });
+      // aux: crevice factor from the radius relative to the local mean (1 = exposed, -1 = deep)
+      for (let k = 0; k < m.p.length / 3; k++) { const X = m.p[k * 3], Y = m.p[k * 3 + 1] / flat, Z = m.p[k * 3 + 2] / elong; m.aux[k] = clamp((hypot(X, Y, Z) - 0.85) * 4, -1, 1); }
+      const b = m.build(); b.m = m; return b;
+    };
+    const meshes = [], rocks = []; // rocks: [x,y,z,r] for collision
+    const glints = [];
+    const S = SUN;
+    const place = (mesh, x, y, z, sc, q, seed, glintRate, mat = 0) => {
+      mesh.inst.push(x, y, z, sc, q[0], q[1], q[2], q[3], mat, seed, 0, 0); rocks.push(x, y, z, sc * 1.05);
+      // NR-G1 glints on lit, upward faces; 30% clumped
+      const P = mesh.m.p, nv = P.length / 3, want = round(glintRate * sc * sc);
+      const qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+      const rot = (vx, vy, vz) => { const tx = 2 * (qy * vz - qz * vy), ty = 2 * (qz * vx - qx * vz), tz = 2 * (qx * vy - qy * vx); return [vx + qw * tx + (qy * tz - qz * ty), vy + qw * ty + (qz * tx - qx * tz), vz + qw * tz + (qx * ty - qy * tx)]; };
+      let made = 0, tries = 0;
+      while (made < want && tries++ < want * 6) {
+        const k = (rnd() * nv) | 0; const N = mesh.nrm; const n = rot(N[k * 3], N[k * 3 + 1], N[k * 3 + 2]);
+        const lit = n[0] * S[0] + n[1] * S[1] + n[2] * S[2];
+        if (lit < -0.9 + rnd() * 0.5) continue;
+        const p = rot(P[k * 3] * sc, P[k * 3 + 1] * sc, P[k * 3 + 2] * sc);
+        const clump = rnd() < 0.3 ? 3 + ((rnd() * 6) | 0) : 1;
+        for (let c = 0; c < clump && made < want; c++, made++) {
+          const j = 0.05 * sc * (c ? 1 : 0);
+          const sz = rr(0.008, 0.02) * (1 + sc * 0.06), br = rr(5, 14) * (0.6 + 0.4 * sat(lit + 0.5));
+          glints.push(x + p[0] + n[0] * 0.01 * sc + rr(-j, j), y + p[1] + n[1] * 0.01 * sc + rr(-j, j), z + p[2] + n[2] * 0.01 * sc + rr(-j, j), sz, 0.12 * br, 1.0 * br, 0.42 * br, 0);
+        }
+      }
+    };
+    const sat = (x) => clamp(x, 0, 1);
+    const withNormals = (b) => { // per-vertex normals for glint placement
+      const P = b.m.p, I = b.m.i, N = new Float32Array(P.length);
+      for (let i = 0; i < I.length; i += 3) { const a = I[i] * 3, c = I[i + 1] * 3, d = I[i + 2] * 3; const ux = P[c] - P[a], uy = P[c + 1] - P[a + 1], uz = P[c + 2] - P[a + 2], vx = P[d] - P[a], vy = P[d + 1] - P[a + 1], vz = P[d + 2] - P[a + 2]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; for (const k of [a, c, d]) { N[k] += nx; N[k + 1] += ny; N[k + 2] += nz; } }
+      for (let k = 0; k < N.length; k += 3) { const l = hypot(N[k], N[k + 1], N[k + 2]) || 1; N[k] /= l; N[k + 1] /= l; N[k + 2] /= l; }
+      b.nrm = N; b.inst = []; return b;
+    };
+    // orientation helper: slab normal (local +y) turned to n, spun by a
+    const orient = (n, a) => { const l = hypot(...n); return qMul(qFromY(n[0] / l, n[1] / l, n[2] / l), qAxis(0, 1, 0, a)); };
+
+    // ---- hero rocks (section 2), each its own detailed mesh
+    const hero = (seed, flat, flake, elong, fx, fy, d, sc, n, spin, gl, mat = 0) => {
+      const b = withNormals(rockMesh(5, seed, flat, flake, elong)); meshes.push(b);
+      const p = at(fx, fy, d); rseed(seed + 900); place(b, p[0], p[1], p[2], sc, orient(n, spin), rnd(), gl, mat);
+    };
+    hero(11, 1.0, 0.9, 1.3, 0.04, 0.84, 6.5, 3.3, [-0.5, 0.35, -0.8], 0.35, 45, 1); // NR-R1 lower-left hero rock
+    hero(12, 0.40, 0.4, 2.1, 0.17, -0.02, 13, 2.0, [0.1, -0.6, -0.8], 2.2, 4);      // NR-R2 upper-left shard (seen from below)
+    hero(13, 0.62, 0.5, 1.7, 0.86, 0.38, 22, 4.0, [0.25, 0.75, -0.6], 2.5, 22, 1);    // NR-R3 right slab against the flare
+    hero(14, 0.80, 0.3, 1.1, 0.49, 0.66, 15, 1.35, [0.0, 0.3, -1], 0.3, 10);        // NR-R4 centre rock
+    hero(15, 0.70, 0.5, 1.2, 0.78, 0.97, 7.5, 1.7, [-0.2, 0.7, -0.7], 1.2, 45, 1);    // NR-R5 lower-right rock
+    hero(16, 0.45, 0.3, 2.0, 0.65, 0.65, 19, 1.3, [0.3, 0.5, -0.8], 0.9, 8);       // NR-R6 elongated mid rock
+    hero(17, 0.75, 0.2, 1.0, 0.035, 0.39, 13, 1.1, [0, 1, -0.3], 0.2, 3);           // NR-R7 small near rocks
+    hero(18, 0.70, 0.2, 1.3, 0.21, 0.32, 15, 0.7, [0, 1, -0.2], 1.3, 3);
+    hero(19, 0.65, 0.1, 1.4, 0.60, 0.80, 80, 20, [0, 0.5, -1], 0.4, 0);             // NR-C4 distant giant mass in the haze
+
+    // ---- swarm (NR-F1): six shared variants, power-law sizes, densest toward C2-D3 and along the view
+    const vars = []; for (let v = 0; v < 6; v++) { const b = withNormals(rockMesh(3, 100 + v, rr(0.55, 0.95), v % 2 ? 0.4 : 0, rr(1, 1.6))); meshes.push(b); vars.push(b); }
+    rseed(7);
+    const heroes = rocks.slice();
+    const free = (x, y, z, r) => { for (let i = 0; i < heroes.length; i += 4) if (hypot(x - heroes[i], y - heroes[i + 1], z - heroes[i + 2]) < heroes[i + 3] * 1.1 + r) return false; return true; };
+    const gauss = () => (rnd() + rnd() + rnd() - 1.5) * 1.15;
+    let made = 0;
+    for (let tries = 0; made < 1500 && tries < 20000; tries++) {
+      const fx = 0.5 + gauss() * 0.3 + 0.02, fy = 0.5 + gauss() * 0.22, d = 22 * Math.pow(10, rnd() * 0.9);
+      const r = clamp(0.08 * Math.pow(1 / max(rnd(), 0.02), 0.6), 0.08, 1.6) * (0.6 + d / 90);
+      const p = at(fx, fy, d); if (!free(p[0], p[1], p[2], r)) continue;
+      place(vars[(rnd() * 6) | 0], p[0], p[1], p[2], r, qRand(), rnd(), d < 40 ? 4 : 1.5); made++;
+    }
+    // a wider reef all around so you can fly anywhere (not visible from the hero camera)
+    for (let i = 0; i < 2600; i++) {
+      const a = rnd() * TAU, b = Math.acos(rr(-1, 1)), d = rr(25, 220);
+      const x = d * sin(b) * cos(a), y = d * cos(b) * 0.6, z = d * sin(b) * sin(a);
+      const p = at(0.5, 0.5, 1); if ((x * p[0] + y * p[1] + z * p[2]) / d > 0.55) continue; // keep the hero view as composed
+      const r = clamp(0.2 * Math.pow(1 / max(rnd(), 0.02), 0.6), 0.2, 6);
+      place(vars[(rnd() * 6) | 0], x, y, z, r, qRand(), rnd(), 1.5);
+    }
+    // ---- motes and streaks (NR-S4, NR-S5)
+    const pts = glints;
+    for (let i = 0; i < 2500; i++) { const p = at(rnd(), rnd(), rr(4, 70)); const b = rr(0.6, 2.2); pts.push(p[0], p[1], p[2], rr(0.012, 0.03), 0.35 * b, 0.65 * b, 1.0 * b, 1); }
+    for (let i = 0; i < 9; i++) { const p = at(rr(0.1, 0.5), rr(0.6, 1.0), rr(12, 30)); pts.push(p[0], p[1], p[2], rr(0.02, 0.04), 0.25, 0.9, 1.6, 3); }
+
+    const RK = new Float32Array(rocks);
+    const collide = (F) => { // push the camera out of rocks (bounding spheres)
+      for (let i = 0; i < RK.length; i += 4) {
+        const dx = F[0] - RK[i], dy = F[1] - RK[i + 1], dz = F[2] - RK[i + 2], r = RK[i + 3] * 0.8 + 0.6, d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < r * r && d2 > 1e-6) { const d = sqrt(d2), k = (r - d) / d; F[0] += dx * k; F[1] += dy * k; F[2] += dz * k; }
+      }
+    };
+    for (const m of meshes) m.inst = new Float32Array(m.inst);
+    return {
+      meshes, points: new Float32Array(pts), collide,
+      poses: [[0, 0, 0, 0, HERO_PITCH, HERO_FOV], [-12, -6, -30, 0.25, 0.3, 1.1], [30, 26, 40, 0.6, 0.2, 1.1]],
+    };
+  },
+};
+
+await runScene(SCENE);
+})().catch(e=>{console.error(e);document.body.className='l e';document.getElementById('s').textContent=(e.cause?'':'Failed to start: ')+e.message});</script>
+</body>
+</html>
